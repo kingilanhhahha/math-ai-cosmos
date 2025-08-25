@@ -65,6 +65,26 @@ export interface GuestUser {
   guestName: string;
 }
 
+export interface Achievement {
+  id: string;
+  userId: string;
+  lessonId: string;
+  lessonName: string;
+  lessonType: 'solar-system' | 'philippines-map' | 'other';
+  xpEarned: number;
+  completedAt: Date;
+  planetName?: string; // For solar system lessons
+  locationName?: string; // For Philippines map lessons
+}
+
+export interface AchievementStats {
+  totalXP: number;
+  lessonsCompleted: number;
+  solarSystemLessons: number;
+  philippinesMapLessons: number;
+  achievements: Achievement[];
+}
+
 const envApi = (import.meta as any).env?.VITE_DB_API || '';
 const inferredApi = typeof window !== 'undefined' ? `http://${window.location.hostname}:5055` : 'http://localhost:5055';
 const API_BASE = envApi || inferredApi;
@@ -77,10 +97,19 @@ export function getDbConfig() {
 
 async function apiGet<T>(path: string): Promise<T> {
   console.log(`🌐 API GET: ${API_BASE}${path}`);
-  const res = await fetch(`${API_BASE}${path}`, {
+  
+  // Add timeout protection to prevent hanging requests
+  const timeoutPromise = new Promise<never>((_, reject) => 
+    setTimeout(() => reject(new Error('API timeout')), 5000)
+  );
+  
+  const fetchPromise = fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     cache: 'no-store'
   });
+  
+  const res = await Promise.race([fetchPromise, timeoutPromise]);
+  
   if (!res.ok) {
     const errorText = await res.text();
     console.error(`API GET failed: ${res.status} - ${errorText}`);
@@ -91,12 +120,21 @@ async function apiGet<T>(path: string): Promise<T> {
 
 async function apiPost<T>(path: string, body: any): Promise<T> {
   console.log(`🌐 API POST: ${API_BASE}${path}`, body);
-  const res = await fetch(`${API_BASE}${path}`, {
+  
+  // Add timeout protection to prevent hanging requests
+  const timeoutPromise = new Promise<never>((_, reject) => 
+    setTimeout(() => reject(new Error('API timeout')), 5000)
+  );
+  
+  const fetchPromise = fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     cache: 'no-store'
   });
+  
+  const res = await Promise.race([fetchPromise, timeoutPromise]);
+  
   if (!res.ok) {
     const errorText = await res.text();
     console.error(`API POST failed: ${res.status} - ${errorText}`);
@@ -762,4 +800,240 @@ class HybridDatabase {
   }
 }
 
-export const db = new HybridDatabase(); 
+export const db = new HybridDatabase();
+
+// --- BEGIN ADD: progress API helpers ---
+export type ProgressPayload = {
+  user_id: string;
+  module_id: string;     // e.g., 'RationalEq'
+  section_id: string;    // e.g., 'S2'
+  slide_index: number;   // 0-based
+  progress_pct: number;  // 0..100
+};
+
+
+
+export async function getProgress(userId: string) {
+  const res = await fetch(`${API_BASE}/api/user-progress/${userId}`);
+  if (!res.ok) throw new Error('Failed to fetch progress');
+  return res.json();
+}
+
+export async function upsertProgress(p: ProgressPayload) {
+  const res = await fetch(`${API_BASE}/api/user-progress/upsert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  });
+  if (!res.ok) throw new Error('Failed to upsert progress');
+  return res.json();
+}
+
+// New batch progress saver for better performance
+export async function saveBatchProgress(batch: BatchProgressPayload) {
+  if (HAS_API) {
+    try {
+      const res = await fetch(`${API_BASE}/api/progress/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(batch),
+      });
+      if (!res.ok) throw new Error('Failed to save batch progress');
+      return res.json();
+    } catch (e) {
+      // Fallback to individual saves
+      console.warn('Batch save failed, falling back to individual saves');
+      return await saveBatchProgressFallback(batch);
+    }
+  }
+  
+  // Offline mode - save to localStorage
+  return saveBatchProgressOffline(batch);
+}
+
+// Fallback method for when batch API fails
+async function saveBatchProgressFallback(batch: BatchProgressPayload) {
+  const results = [];
+  
+  // Save progress updates
+  for (const progress of batch.progress_updates) {
+    try {
+      const result = await upsertProgress(progress);
+      results.push(result);
+    } catch (error) {
+      console.error('Failed to save progress:', error);
+      enqueueOffline(progress);
+    }
+  }
+  
+  // Save achievements if any
+  if (batch.achievements) {
+    for (const achievement of batch.achievements) {
+      try {
+        await saveAchievement(achievement);
+      } catch (error) {
+        console.error('Failed to save achievement:', error);
+      }
+    }
+  }
+  
+  // Save lesson completion if any
+  if (batch.lesson_completion) {
+    try {
+      const allProgress = getStudentProgressData();
+      const newProgress = {
+        id: generateId(),
+        studentId: batch.user_id,
+        moduleId: batch.lesson_completion.lessonId,
+        moduleName: batch.lesson_completion.lessonName,
+        completedAt: new Date(),
+        score: batch.lesson_completion.score,
+        timeSpent: batch.lesson_completion.timeSpent,
+        equationsSolved: batch.lesson_completion.equationsSolved,
+        mistakes: batch.lesson_completion.mistakes,
+        skillBreakdown: batch.lesson_completion.skillBreakdown,
+      };
+      allProgress.push(newProgress);
+      saveStudentProgressData(allProgress);
+    } catch (error) {
+      console.error('Failed to save lesson completion:', error);
+    }
+  }
+  
+  return results;
+}
+
+// Offline batch save
+function saveBatchProgressOffline(batch: BatchProgressPayload) {
+  // Save progress updates
+  for (const progress of batch.progress_updates) {
+    enqueueOffline(progress);
+  }
+  
+  // Save achievements locally
+  if (batch.achievements) {
+    for (const achievement of batch.achievements) {
+      const achievements = JSON.parse(localStorage.getItem('achievements') || '[]');
+      const newAchievement = {
+        ...achievement,
+        id: `local_${Date.now()}_${Math.random()}`,
+        completedAt: new Date(),
+      };
+      achievements.push(newAchievement);
+      localStorage.setItem('achievements', JSON.stringify(achievements));
+    }
+  }
+  
+  // Save lesson completion locally
+  if (batch.lesson_completion) {
+    const allProgress = getStudentProgressData();
+    const newProgress = {
+      id: generateId(),
+      studentId: batch.user_id,
+      moduleId: batch.lesson_completion.lessonId,
+      moduleName: batch.lesson_completion.lessonName,
+      completedAt: new Date(),
+      score: batch.lesson_completion.score,
+      timeSpent: batch.lesson_completion.timeSpent,
+      equationsSolved: batch.lesson_completion.equationsSolved,
+      mistakes: batch.lesson_completion.mistakes,
+      skillBreakdown: batch.lesson_completion.skillBreakdown,
+    };
+    allProgress.push(newProgress);
+    saveStudentProgressData(allProgress);
+  }
+  
+  return { success: true, offline: true };
+}
+
+// Offline buffer (FIFO) stored in localStorage
+const OFFLINE_KEY = 'offline_progress_queue_v1';
+
+export function enqueueOffline(p: ProgressPayload) {
+  const q: ProgressPayload[] = JSON.parse(localStorage.getItem(OFFLINE_KEY) || '[]');
+  q.push(p);
+  localStorage.setItem(OFFLINE_KEY, JSON.stringify(q));
+}
+
+export async function syncOfflineProgress() {
+  const q: ProgressPayload[] = JSON.parse(localStorage.getItem(OFFLINE_KEY) || '[]');
+  if (!q.length) return;
+  for (const item of q) {
+    try { await upsertProgress(item); } catch { /* keep in queue */ }
+  }
+  // Clear only if last push succeeded
+  localStorage.removeItem(OFFLINE_KEY);
+}
+// --- END ADD --- 
+
+// Achievement functions
+export async function saveAchievement(achievement: Omit<Achievement, 'id' | 'completedAt'>): Promise<void> {
+  if (DB_MODE === 'api-only' || !HAS_API) {
+    // Store in localStorage for offline mode
+    const achievements = JSON.parse(localStorage.getItem('achievements') || '[]');
+    const newAchievement = {
+      ...achievement,
+      id: `local_${Date.now()}_${Math.random()}`,
+      completedAt: new Date(),
+    };
+    achievements.push(newAchievement);
+    localStorage.setItem('achievements', JSON.stringify(achievements));
+    return;
+  }
+
+  try {
+    await apiPost('/achievements', achievement);
+  } catch (error) {
+    console.error('Failed to save achievement:', error);
+    // Fallback to localStorage
+    const achievements = JSON.parse(localStorage.getItem('achievements') || '[]');
+    const newAchievement = {
+      ...achievement,
+      id: `local_${Date.now()}_${Math.random()}`,
+      completedAt: new Date(),
+    };
+    achievements.push(newAchievement);
+    localStorage.setItem('achievements', JSON.stringify(achievements));
+  }
+}
+
+export async function getUserAchievements(userId: string): Promise<Achievement[]> {
+  if (DB_MODE === 'api-only' || !HAS_API) {
+    // Get from localStorage for offline mode
+    const achievements = JSON.parse(localStorage.getItem('achievements') || '[]');
+    return achievements.filter((a: Achievement) => a.userId === userId);
+  }
+
+  try {
+    // Add timeout to prevent hanging API calls
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('API timeout')), 3000)
+    );
+    
+    const achievementsPromise = apiGet<Achievement[]>(`/achievements/${userId}`);
+    const achievements = await Promise.race([achievementsPromise, timeoutPromise]);
+    return achievements;
+  } catch (error) {
+    console.error('Failed to get achievements from API, falling back to localStorage:', error);
+    // Fallback to localStorage
+    const achievements = JSON.parse(localStorage.getItem('achievements') || '[]');
+    return achievements.filter((a: Achievement) => a.userId === userId);
+  }
+}
+
+export async function getAchievementStats(userId: string): Promise<AchievementStats> {
+  const achievements = await getUserAchievements(userId);
+  
+  const totalXP = achievements.reduce((sum, a) => sum + a.xpEarned, 0);
+  const lessonsCompleted = achievements.length;
+  const solarSystemLessons = achievements.filter(a => a.lessonType === 'solar-system').length;
+  const philippinesMapLessons = achievements.filter(a => a.lessonType === 'philippines-map').length;
+
+  return {
+    totalXP,
+    lessonsCompleted,
+    solarSystemLessons,
+    philippinesMapLessons,
+    achievements: achievements.sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()),
+  };
+} 

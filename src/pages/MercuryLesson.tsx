@@ -4,8 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { usePlayer } from '@/contexts/PlayerContext';
 import { useToast } from '@/hooks/use-toast';
 import { 
   BookOpen, 
@@ -39,6 +41,7 @@ const mercuryBg = new URL('../../planet background/mercury.webp', import.meta.ur
 const MercuryLesson: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { saveProgress, awardXP, saveAchievement } = usePlayer();
   const { toast } = useToast();
   const [currentSection, setCurrentSection] = useState(0);
   const [showDialogue, setShowDialogue] = useState(true);
@@ -46,6 +49,32 @@ const MercuryLesson: React.FC = () => {
   const [userXP] = useState(750);
   const [maxXP] = useState(1000);
   const [progress, setProgress] = useState(0);
+  const [showCompletionDialog, setShowCompletionDialog] = useState(false);
+
+  // Save initial progress when lesson starts
+  React.useEffect(() => {
+    if (user?.id) {
+      saveProgress(user.id, {
+        module_id: 'mercury',
+        section_id: 'section_0',
+        slide_index: 0,
+        progress_pct: ((currentSection + 1) / sections.length) * 100,
+      });
+    }
+  }, [user?.id]);
+
+  // Save progress whenever currentSection changes
+  React.useEffect(() => {
+    if (user?.id) {
+      const progressPercentage = ((currentSection + 1) / sections.length) * 100;
+      saveProgress(user.id, {
+        module_id: 'mercury',
+        section_id: 'section_0',
+        slide_index: currentSection,
+        progress_pct: progressPercentage,
+      });
+    }
+  }, [currentSection, user?.id, saveProgress]);
   const [quizAnswers, setQuizAnswers] = useState<{[key: string]: string}>({});
   const [quizResults, setQuizResults] = useState<{[key: string]: boolean}>({});
   const [showQuizResults, setShowQuizResults] = useState(false);
@@ -54,9 +83,76 @@ const MercuryLesson: React.FC = () => {
   
   // Audio state
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
-  const [currentAudioSrc, setCurrentAudioSrc] = useState<string>('');
   const [currentAudioIndex, setCurrentAudioIndex] = useState(0);
+  const [currentAudioSrc, setCurrentAudioSrc] = useState<string>('');
+  const [questionsAnswered, setQuestionsAnswered] = useState<Record<number, {correct: boolean, answer: string, explanation?: string}>>({});
+  const [showQuestionFeedback, setShowQuestionFeedback] = useState<Record<number, boolean>>({});
+  const [quizCompleted, setQuizCompleted] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  const handleQuizAnswer = (questionId: number, selectedAnswer: string, correctAnswer: string, explanation: string) => {
+    const isCorrect = selectedAnswer === correctAnswer;
+    
+    setQuestionsAnswered(prev => ({
+      ...prev,
+      [questionId]: {
+        correct: isCorrect,
+        answer: selectedAnswer,
+        explanation: isCorrect ? undefined : explanation
+      }
+    }));
+
+    setShowQuestionFeedback(prev => ({
+      ...prev,
+      [questionId]: true
+    }));
+
+    if (isCorrect) {
+      toast({
+        title: "Correct! 🎉",
+        description: "Great job! You understand this concept.",
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "Not quite right 📚",
+        description: "Check the explanation below to learn more.",
+        variant: "destructive",
+      });
+    }
+
+    // Check if quiz is completed
+    const totalQuestions = 3;
+    const answeredCount = Object.keys(questionsAnswered).length + 1;
+    if (answeredCount === totalQuestions) {
+      setTimeout(() => setQuizCompleted(true), 1000);
+    }
+  };
+
+  const getPerformanceSummary = () => {
+    const answers = Object.values(questionsAnswered);
+    const correct = answers.filter(a => a.correct).length;
+    const total = answers.length;
+    const percentage = total > 0 ? Math.round((correct / total) * 100) : 0;
+    
+    return { correct, total, percentage };
+  };
+
+  const getImprovementAreas = () => {
+    const areas: string[] = [];
+    
+    if (questionsAnswered[1] && !questionsAnswered[1].correct) {
+      areas.push("Understanding rational equation structure");
+    }
+    if (questionsAnswered[2] && !questionsAnswered[2].correct) {
+      areas.push("Identifying restrictions in rational equations");
+    }
+    if (questionsAnswered[3] && !questionsAnswered[3].correct) {
+      areas.push("Applying LCD method to solve rational equations");
+    }
+    
+    return areas;
+  };
 
   // Audio files sequence
   const audioSequence = [
@@ -598,26 +694,274 @@ const MercuryLesson: React.FC = () => {
           </div>
         </div>
       )
+    },
+    {
+      id: 7,
+      title: "Assessment",
+      icon: <Brain className="w-6 h-6" />,
+      content: (
+        <div className="space-y-6">
+          <div className="bg-white/10 rounded-xl p-4 border border-white/20 backdrop-blur-sm">
+            <h4 className="font-semibold text-white mb-3 text-lg">Q1</h4>
+            <p className="text-white/90 mb-3 text-base">What is a rational equation?</p>
+            <div className="grid grid-cols-2 gap-2">
+              {['An equation with fractions', 'An equation with variables', 'An equation with polynomials', 'An equation with rational expressions'].map((a) => (
+                <Button
+                  key={a}
+                  variant={questionsAnswered[1]?.answer === a ? 
+                    (questionsAnswered[1]?.correct ? "default" : "destructive") : "outline"}
+                  size="sm"
+                  onClick={() => handleQuizAnswer(
+                    1, 
+                    a, 
+                    'An equation with rational expressions',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[1]}
+                  className="hover:shadow-[0_0_20px_rgba(59,130,246,0.35)]"
+                >
+                  {a}
+                </Button>
+              ))}
+            </div>
+            {showQuestionFeedback[1] && questionsAnswered[1] && !questionsAnswered[1].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30 mt-3">
+                <h5 className="text-red-200 font-semibold mb-3">💡 Understanding Rational Equations:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">KEY POINT: Rational expressions are fractions with polynomials</p>
+                    <p>• A rational equation contains at least one rational expression</p>
+                    <p>• Rational expressions have polynomials in numerator and/or denominator</p>
+                    <p>• Examples: 1/x, (x+1)/(x-2), 3/(x²+1)</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">WHY "rational expressions"?</p>
+                    <p>• "Rational" comes from "ratio" - these are ratios of polynomials</p>
+                    <p>• They can be written as P(x)/Q(x) where P and Q are polynomials</p>
+                    <p>• Q(x) ≠ 0 (denominator cannot be zero)</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[1] && questionsAnswered[1] && questionsAnswered[1].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30 mt-3">
+                <p className="text-green-200 font-semibold">✅ Excellent! You correctly identified rational equations.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white/10 rounded-xl p-4 border border-white/20 backdrop-blur-sm">
+            <h4 className="font-semibold text-white mb-3 text-lg">Q2</h4>
+            <p className="text-white/90 mb-3 text-base">What are restrictions in rational equations?</p>
+            <div className="grid grid-cols-2 gap-2">
+              {['Values that make the equation true', 'Values that make denominators zero', 'Values that solve the equation', 'Values that make numerators zero'].map((a) => (
+                <Button
+                  key={a}
+                  variant={questionsAnswered[2]?.answer === a ? 
+                    (questionsAnswered[2]?.correct ? "default" : "destructive") : "outline"}
+                  size="sm"
+                  onClick={() => handleQuizAnswer(
+                    2, 
+                    a, 
+                    'Values that make denominators zero',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[2]}
+                  className="hover:shadow-[0_0_20px_rgba(59,130,246,0.35)]"
+                >
+                  {a}
+                </Button>
+              ))}
+            </div>
+            {showQuestionFeedback[2] && questionsAnswered[2] && !questionsAnswered[2].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30 mt-3">
+                <h5 className="text-red-200 font-semibold mb-3">💡 Understanding Restrictions:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">WHY do we have restrictions?</p>
+                    <p>• Division by zero is undefined in mathematics</p>
+                    <p>• If a denominator equals zero, the fraction becomes undefined</p>
+                    <p>• Example: 1/(x-3) is undefined when x = 3</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">HOW to find restrictions:</p>
+                    <p>• Set each denominator equal to zero</p>
+                    <p>• Solve for the variable</p>
+                    <p>• These values are excluded from solutions</p>
+                  </div>
+                  <div className="bg-green-500/20 rounded p-2 border border-green-300/30">
+                    <p className="text-green-200 text-xs">✓ Example: For 1/(x-2) + 1/(x+1), restrictions are x ≠ 2 and x ≠ -1</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[2] && questionsAnswered[2] && questionsAnswered[2].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30 mt-3">
+                <p className="text-green-200 font-semibold">✅ Perfect! You understand restrictions correctly.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white/10 rounded-xl p-4 border border-white/20 backdrop-blur-sm">
+            <h4 className="font-semibold text-white mb-3 text-lg">Q3</h4>
+            <p className="text-white/90 mb-3 text-base">What is the first step in solving rational equations?</p>
+            <div className="grid grid-cols-2 gap-2">
+              {['Find the LCD', 'Identify restrictions', 'Multiply by denominators', 'Cross multiply'].map((a) => (
+                <Button
+                  key={a}
+                  variant={questionsAnswered[3]?.answer === a ? 
+                    (questionsAnswered[3]?.correct ? "default" : "destructive") : "outline"}
+                  size="sm"
+                  onClick={() => handleQuizAnswer(
+                    3, 
+                    a, 
+                    'Identify restrictions',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[3]}
+                  className="hover:shadow-[0_0_20px_rgba(59,130,246,0.35)]"
+                >
+                  {a}
+                </Button>
+              ))}
+            </div>
+            {showQuestionFeedback[3] && questionsAnswered[3] && !questionsAnswered[3].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30 mt-3">
+                <h5 className="text-red-200 font-semibold mb-3">💡 Solving Rational Equations - Step Order:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 1: Identify restrictions FIRST</p>
+                    <p>• Find values that make any denominator zero</p>
+                    <p>• These values are excluded from solutions</p>
+                    <p>• Write them down: x ≠ 2, x ≠ -1, etc.</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 2: Find the LCD</p>
+                    <p>• Determine the Least Common Denominator</p>
+                    <p>• This will eliminate all fractions</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 3: Multiply through by LCD</p>
+                    <p>• This converts to a polynomial equation</p>
+                    <p>• Much easier to solve!</p>
+                  </div>
+                  <div className="bg-green-500/20 rounded p-2 border border-green-300/30">
+                    <p className="text-green-200 text-xs">✓ Always check restrictions first to avoid undefined operations!</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[3] && questionsAnswered[3] && questionsAnswered[3].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30 mt-3">
+                <p className="text-green-200 font-semibold">✅ Great! You know the correct order of steps.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Quiz Results */}
+          {quizCompleted && (
+            <div className="bg-gradient-to-br from-indigo-500/20 to-cyan-500/20 rounded-xl p-6 border border-indigo-300/30">
+              <h4 className="text-indigo-200 font-semibold mb-4 flex items-center gap-2">
+                <Trophy className="w-6 h-6" />
+                Quiz Results
+              </h4>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="bg-white/10 rounded-lg p-4">
+                  <h5 className="text-white font-semibold mb-2">Performance Summary</h5>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-cyan-300 mb-1">
+                      {getPerformanceSummary().correct}/{getPerformanceSummary().total}
+                    </div>
+                    <p className="text-white/80 text-sm">Questions Correct</p>
+                    <div className="text-xl font-semibold text-cyan-200 mt-2">
+                      {getPerformanceSummary().percentage}%
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white/10 rounded-lg p-4">
+                  <h5 className="text-white font-semibold mb-2">Areas to Improve</h5>
+                  {getImprovementAreas().length > 0 ? (
+                    <ul className="text-sm text-white/90 space-y-1">
+                      {getImprovementAreas().map((area, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="text-yellow-400 mt-1">•</span>
+                          {area}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-green-300 text-sm">🎉 Excellent! No areas need improvement.</p>
+                  )}
+                </div>
+              </div>
+              {getPerformanceSummary().percentage >= 70 ? (
+                <div className="bg-green-500/20 rounded-lg p-4 mt-4 border border-green-300/30 text-center">
+                  <p className="text-green-200 font-semibold">🎊 Well done! You're ready to continue to the next lesson!</p>
+                </div>
+              ) : (
+                <div className="bg-yellow-500/20 rounded-lg p-4 mt-4 border border-yellow-300/30 text-center">
+                  <p className="text-yellow-200 font-semibold">📚 Consider reviewing the concepts above before continuing.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )
     }
   ];
 
-  const handleNextSection = () => {
+  const handleNextSection = async () => {
     if (currentSection < sections.length - 1) {
-      setCurrentSection(currentSection + 1);
-      setProgress(((currentSection + 1) / sections.length) * 100);
+      const newSection = currentSection + 1;
+      setCurrentSection(newSection);
+      const newProgress = ((newSection + 1) / sections.length) * 100;
+      setProgress(newProgress);
+      
+      // Save progress to new tracking system
+      if (user?.id) {
+        await saveProgress(user.id, {
+          module_id: 'mercury',
+          section_id: `section_${newSection}`,
+          slide_index: newSection,
+          progress_pct: newProgress,
+        });
+      }
     }
   };
 
-  const handlePrevSection = () => {
+  const handlePrevSection = async () => {
     if (currentSection > 0) {
-      setCurrentSection(currentSection - 1);
-      setProgress(((currentSection - 1) / sections.length) * 100);
+      const newSection = currentSection - 1;
+      setCurrentSection(newSection);
+      const newProgress = ((newSection + 1) / sections.length) * 100;
+      setProgress(newProgress);
+      
+      // Save progress to new tracking system
+      if (user?.id) {
+        await saveProgress(user.id, {
+          module_id: 'mercury',
+          section_id: `section_${newSection}`,
+          slide_index: newSection,
+          progress_pct: newProgress,
+        });
+      }
     }
   };
 
-  const handleSectionClick = (sectionIndex: number) => {
+  const handleSectionClick = async (sectionIndex: number) => {
     setCurrentSection(sectionIndex);
-    setProgress((sectionIndex / sections.length) * 100);
+    const newProgress = ((sectionIndex + 1) / sections.length) * 100;
+    setProgress(newProgress);
+    
+    // Save progress to new tracking system
+    if (user?.id) {
+      await saveProgress(user.id, {
+        module_id: 'mercury',
+        section_id: `section_${sectionIndex}`,
+        slide_index: sectionIndex,
+        progress_pct: newProgress,
+      });
+    }
   };
 
   const handleNextDialogue = () => {
@@ -627,18 +971,48 @@ const MercuryLesson: React.FC = () => {
   };
 
   const handleGoBack = () => {
-    navigate('/rpg');
+    navigate('/index');
   };
 
-  const handleFinishLesson = () => {
-    // Show completion message
-    toast({
-      title: "Lesson Completed! 🎉",
-      description: "Congratulations! You've completed the Mercury Introduction to Rational Equations lesson.",
-      variant: "default",
-    });
+  const handleFinishLesson = async () => {
+    // Award XP for completing the Mercury lesson
+    awardXP(200, 'mercury-lesson-completed');
     
-    // Navigate back to the solar system
+    // Save achievement
+    if (user?.id) {
+      saveAchievement({
+        userId: user.id,
+        lessonId: 'mercury-lesson',
+        lessonName: 'Mercury: Intro to Rational Equations',
+        lessonType: 'solar-system',
+        xpEarned: 200,
+        planetName: 'Mercury',
+      });
+    }
+    
+    // Save current lesson (Mercury) as completed
+    await saveProgress(user.id, { module_id: 'mercury', section_id: 'section_0', slide_index: sections.length - 1, progress_pct: 100 });
+    
+    // Also save progress for next planet (Venus) so it shows up in "In Progress"
+    if (user?.id) {
+      await saveProgress(user.id, {
+        module_id: 'venus',
+        section_id: 'section_0',
+        slide_index: 0,
+        progress_pct: 0, // Starting fresh on next lesson
+      });
+    }
+    
+    // Show completion dialog instead of navigating directly
+    setShowCompletionDialog(true);
+  };
+
+  const handleContinueToNext = () => {
+    navigate('/venus-lesson');
+  };
+
+  const handleBackToSolarSystem = () => {
+    saveProgress(user.id, { module_id: 'venus', section_id: 'section_0', slide_index: 0, progress_pct: 0 });
     navigate('/rpg');
   };
 
@@ -648,9 +1022,9 @@ const MercuryLesson: React.FC = () => {
       <motion.div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{ backgroundImage: `url(${mercuryBg})` }}
-        initial={{ scale: 1.05, x: -10, y: -10 }}
-        animate={{ scale: 1, x: 0, y: 0 }}
-        transition={{ duration: 1.5, ease: "easeOut" }}
+        initial={{ scale: 1.02, x: 0, y: 0 }}
+        animate={{ scale: 1.05, x: 5, y: 3 }}
+        transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
       />
       <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-black/80" />
       <div className="absolute inset-0 cosmic-starfield opacity-30" />
@@ -667,15 +1041,26 @@ const MercuryLesson: React.FC = () => {
         >
           <div className="container mx-auto flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={handleGoBack}
-                className="flex items-center gap-2 text-white hover:bg-white/10"
-              >
-                <ArrowLeft size={16} />
-                Back to Solar System
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={handleGoBack}
+                  className="flex items-center gap-2 text-white hover:bg-white/10"
+                >
+                  <ArrowLeft size={16} />
+                  Back to Solar System
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleGoBack}
+                  className="text-white border-white/20 hover:bg-white/10"
+                >
+                  <Home size={16} className="mr-1" />
+                  Exit Lesson
+                </Button>
+              </div>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-gradient-to-br from-gray-400 to-gray-600 rounded-lg flex items-center justify-center">
                   <Star size={24} className="text-white" />
@@ -808,6 +1193,37 @@ const MercuryLesson: React.FC = () => {
         onError={handleAudioError}
         preload="metadata"
       />
+
+      {/* Lesson Completion Dialog */}
+      <AlertDialog open={showCompletionDialog} onOpenChange={setShowCompletionDialog}>
+        <AlertDialogContent className="border-cosmic-purple/20 bg-cosmic-dark/95 backdrop-blur-md">
+          <AlertDialogHeader className="text-center">
+            <AlertDialogTitle className="text-2xl font-orbitron text-cosmic-purple">
+              🎉 Mercury Lesson Complete!
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-cosmic-text text-center">
+              Excellent work! You've mastered the basic concepts of rational equations. 
+              <br />
+              <strong className="text-cosmic-green">Venus lesson is now unlocked!</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-3 justify-center">
+            <AlertDialogCancel 
+              onClick={handleBackToSolarSystem}
+              className="bg-transparent border-white/20 text-white hover:bg-white/10"
+            >
+              <Home size={16} className="mr-2" />
+              Solar System
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleContinueToNext}
+              className="bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white"
+            >
+              Continue to Venus 🌅
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

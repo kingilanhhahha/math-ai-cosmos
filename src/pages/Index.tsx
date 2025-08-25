@@ -13,11 +13,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import cosmicBackground from '@/assets/cosmic-background.png';
 import { usePlayer } from '@/contexts/PlayerContext';
+import { resolveProgressRoute } from '@/App';
+import { db } from '@/lib/database';
 
 const Index = () => {
   const [showDialogue, setShowDialogue] = useState(true);
   const [dialogueStep, setDialogueStep] = useState(0);
-  const { level, currentXP, nextLevelXP } = usePlayer();
+  const { level, currentXP, nextLevelXP, currentProgress } = usePlayer();
 
   const { user, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
@@ -102,6 +104,77 @@ const Index = () => {
   const handleLessonClick = (lessonTitle: string) => {
     console.log(`Starting lesson: ${lessonTitle}`);
     // TODO: Navigate to lesson page
+  };
+
+  const getNextLessonName = (moduleId: string): string => {
+    const lessonNames: Record<string, string> = {
+      'mercury': 'Venus',
+      'venus': 'Earth', 
+      'earth': 'Mars',
+      'mars': 'Jupiter',
+      'jupiter': 'Saturn',
+      'saturn': 'Uranus',
+      'uranus': 'Neptune',
+      'neptune': 'Mercury (Review)'
+    };
+    
+    const cleanModuleId = moduleId.toLowerCase().replace('lesson-', '');
+    return lessonNames[cleanModuleId] || 'Mercury';
+  };
+
+  const handleContinueJourney = async () => {
+    if (currentProgress?.module_id) {
+      // Continue from where user left off
+      const path = resolveProgressRoute(currentProgress);
+      navigate(path);
+    } else {
+      // No progress yet, check if user has completed any lessons
+      try {
+        if (user?.id) {
+          const progress = await db.getStudentProgress(user.id);
+          if (progress.length > 0) {
+            // Find the most recently completed lesson or in-progress lesson
+            const sortedProgress = progress.sort((a, b) => 
+              new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
+            );
+            
+            // Find the next lesson to continue from
+            const lastCompleted = sortedProgress[0];
+            const lastModuleId = lastCompleted.moduleId.toLowerCase();
+            
+            // Determine next lesson based on completion
+            let nextLesson = '/mercury-lesson'; // default
+            
+            if (lastModuleId.includes('mercury')) {
+              nextLesson = '/venus-lesson';
+            } else if (lastModuleId.includes('venus')) {
+              nextLesson = '/earth-lesson';
+            } else if (lastModuleId.includes('earth')) {
+              nextLesson = '/mars-lesson';
+            } else if (lastModuleId.includes('mars')) {
+              nextLesson = '/jupiter-lesson';
+            } else if (lastModuleId.includes('jupiter')) {
+              nextLesson = '/saturn-lesson';
+            } else if (lastModuleId.includes('saturn')) {
+              nextLesson = '/uranus-lesson';
+            } else if (lastModuleId.includes('uranus')) {
+              nextLesson = '/neptune-lesson';
+            } else if (lastModuleId.includes('neptune')) {
+              // All lessons completed, go back to Mercury for review
+              nextLesson = '/mercury-lesson';
+            }
+            
+            navigate(nextLesson);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('Error checking progress:', error);
+      }
+      
+      // Fallback to Mercury if no progress or error
+      navigate('/mercury-lesson');
+    }
   };
 
   return (
@@ -221,16 +294,30 @@ const Index = () => {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.5 }}
-              className="flex flex-col sm:flex-row gap-4 justify-center items-center"
+              className="flex flex-col items-center gap-4"
             >
-              <Button variant="hero" size="lg" className="px-8">
-                <Play size={20} />
-                Continue Journey
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => window.location.href = '/rpg'}>
-                <BookOpen size={20} />
-                🚀 RPG Mode
-              </Button>
+              {/* Progress indicator */}
+              {currentProgress?.module_id && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6 }}
+                  className="text-sm text-muted-foreground bg-muted/50 px-4 py-2 rounded-full border border-border/30"
+                >
+                  📍 Continue from: {getNextLessonName(currentProgress.module_id)}
+                </motion.div>
+              )}
+              
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+                <Button variant="hero" size="lg" className="px-8" onClick={handleContinueJourney}>
+                  <Play size={20} />
+                  {currentProgress?.module_id ? 'Continue Journey' : 'Start Journey'}
+                </Button>
+                <Button variant="outline" size="lg" onClick={() => window.location.href = '/rpg'}>
+                  <BookOpen size={20} />
+                  🚀 RPG Mode
+                </Button>
+              </div>
             </motion.div>
           )}
         </motion.section>
@@ -299,6 +386,64 @@ const Index = () => {
                   src="/calculator" 
                   className="w-full h-[500px] border-0"
                   title="Interactive Math Solver"
+                />
+              </div>
+            </div>
+          </div>
+        </motion.section>
+
+        {/* Quantum Rational Function Solver Section */}
+        <motion.section 
+          className="container mx-auto px-6 py-12"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.6, delay: 1.2 }}
+        >
+          <div className="text-center mb-8">
+            <h3 className="font-orbitron font-semibold text-2xl text-card-foreground mb-4">
+              ⚛️ Quantum Rational Function Solver
+            </h3>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Advanced analysis of rational functions with step-by-step solutions, domain analysis, asymptotes, and more
+            </p>
+          </div>
+          
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-gradient-card border border-primary/30 rounded-lg p-4 shadow-card backdrop-blur-sm">
+              <div className="bg-cosmic-dark rounded-lg overflow-hidden">
+                <iframe 
+                  src="/quantum-solver" 
+                  className="w-full h-[500px] border-0"
+                  title="Quantum Rational Function Solver"
+                />
+              </div>
+            </div>
+          </div>
+        </motion.section>
+
+        {/* Drawing Equation Solver Section */}
+        <motion.section 
+          className="container mx-auto px-6 py-12"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.6, delay: 1.4 }}
+        >
+          <div className="text-center mb-8">
+            <h3 className="font-orbitron font-semibold text-2xl text-card-foreground mb-4">
+              🎨 Drawing Equation Solver
+            </h3>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Draw mathematical equations by hand and get instant step-by-step solutions with AI-powered OCR recognition
+            </p>
+          </div>
+          
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-gradient-card border border-primary/30 rounded-lg p-4 shadow-card backdrop-blur-sm">
+              <div className="bg-cosmic-dark rounded-lg overflow-hidden">
+                <iframe 
+                  src="/drawing-solver" 
+                  className="w-full h-[500px] border-0"
+                  title="Drawing Equation Solver"
                 />
               </div>
             </div>

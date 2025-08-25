@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { PlayerProvider } from "@/contexts/PlayerContext";
 import RPGIndex from "./pages/RPGIndex";
+import Index from "./pages/Index";
 import LoginPage from "./pages/LoginPage";
 import TeacherDashboard from "./pages/TeacherDashboard";
 import MercuryLesson from "./pages/MercuryLesson";
@@ -16,14 +17,60 @@ import JupiterLesson from "./pages/JupiterLesson";
 import SaturnLesson from "./pages/SaturnLesson";
 import UranusLesson from "./pages/UranusLesson";
 import NeptuneLesson from "./pages/NeptuneLesson";
+import PhilippinesMap from "./pages/PhilippinesMap";
+import RegionLessonPlaceholder from "./pages/RegionLessonPlaceholder";
+import RiceTerracesPolynomial from "./pages/lessons/RiceTerracesPolynomial";
+import ChocolateHillsRational from "./pages/lessons/ChocolateHillsRational";
+import CagsawaDomain from "./pages/lessons/CagsawaDomain";
+import PalawanRestrictions from "./pages/lessons/PalawanRestrictions";
+import TaalGraphs from "./pages/lessons/TaalGraphs";
 import NotFound from "./pages/NotFound";
 import TestPage from "./pages/TestPage";
 import RationalEquationSolver from "@/components/calculator/RationalEquationSolver";
 import { TutorCalculatorPanel } from "./components/calculator/TutorCalculatorPanel";
 import React from "react";
 import BackgroundMusic from "@/components/rpg/BackgroundMusic";
+import CalaguasZeros from "./pages/lessons/CalaguasZeros";
+import QuantumRationalSolverPage from "./pages/QuantumRationalSolverPage";
+import DrawingSolverPage from "./pages/DrawingSolverPage";
 
 const queryClient = new QueryClient();
+
+// --- BEGIN ADD: route resolver ---
+export function resolveProgressRoute(p: { module_id: string | null; section_id: string | null; slide_index: number; }) {
+  // Defaults if new user
+  const moduleId = p.module_id || 'mercury';
+  const sectionId = p.section_id || 'S1';
+  const slide = Number.isFinite(p.slide_index) ? p.slide_index : 0;
+
+  // Map to your existing route schema — planet-based lessons
+  // Default to mercury-lesson if no specific progress
+  if (!p.module_id) {
+    return '/mercury-lesson';
+  }
+  
+  // Map module_id to planet routes
+  const planetRoutes: Record<string, string> = {
+    'mercury': '/mercury-lesson',
+    'venus': '/venus-lesson', 
+    'earth': '/earth-lesson',
+    'mars': '/mars-lesson',
+    'jupiter': '/jupiter-lesson',
+    'saturn': '/saturn-lesson',
+    'uranus': '/uranus-lesson',
+    'neptune': '/neptune-lesson'
+  };
+  
+  // If we have a valid module_id, return the corresponding route
+  const route = planetRoutes[moduleId.toLowerCase()];
+  if (route) {
+    return route;
+  }
+  
+  // Fallback to mercury if module_id is not recognized
+  return '/mercury-lesson';
+}
+// --- END ADD ---
 
 // Simple error boundary component
 class ErrorBoundary extends React.Component<
@@ -88,6 +135,7 @@ const App = () => (
             <BackgroundMusic />
             <Routes>
               <Route path="/" element={<LoginPage />} />
+              <Route path="/index" element={<Index />} />
               <Route path="/rpg" element={<RPGIndex />} />
               <Route path="/mercury-lesson" element={<MercuryLesson />} />
               <Route path="/venus-lesson" element={<VenusLesson />} />
@@ -100,6 +148,16 @@ const App = () => (
               <Route path="/teacher-dashboard" element={<TeacherDashboard />} />
               <Route path="/solver" element={<RationalEquationSolver />} />
               <Route path="/calculator" element={<TutorCalculatorPanel />} />
+              <Route path="/quantum-solver" element={<QuantumRationalSolverPage />} />
+              <Route path="/drawing-solver" element={<DrawingSolverPage />} />
+              <Route path="/philippines-map" element={<PhilippinesMap />} />
+                             <Route path="/lesson/:regionId" element={<RegionLessonPlaceholder />} />
+               <Route path="/lesson/rice-terraces" element={<RiceTerracesPolynomial />} />
+               <Route path="/lesson/chocolate-hills" element={<ChocolateHillsRational />} />
+               <Route path="/lesson/cagsawa-domain" element={<CagsawaDomain />} />
+               <Route path="/lesson/palawan-restrictions" element={<PalawanRestrictions />} />
+               <Route path="/lesson/taal-graphs" element={<TaalGraphs />} />
+               <Route path="/lesson/calaguas-zeros" element={<CalaguasZeros />} />
               <Route path="/test" element={<TestPage />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

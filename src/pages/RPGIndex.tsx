@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { Play, BookOpen, Map, Package, Home, LogOut } from 'lucide-react';
 import Confetti from 'react-confetti';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { resolveProgressRoute } from '@/App';
 
 // RPG Components
 import CosmicBackground from '@/components/rpg/CosmicBackground';
@@ -14,6 +16,7 @@ import CosmicNPC from '@/components/rpg/CosmicNPC';
 import HolographicCard from '@/components/rpg/HolographicCard';
 import SolarSystem from '@/components/rpg/SolarSystem';
 import DialogueBox from '@/components/character/DialogueBox';
+import AchievementDisplay from '@/components/rpg/AchievementDisplay';
 
 // New avatar mapping
 import marisse from '@/components/character/baby ko.png';
@@ -71,8 +74,73 @@ const RPGIndex = () => {
 
   const { user, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const { cadetAvatar } = usePlayer();
+  const { cadetAvatar, currentProgress, getOverallProgress } = usePlayer();
   const [showCharacterSelect, setShowCharacterSelect] = useState(false);
+
+  // --- BEGIN ADD: continue handler ---
+  function handleContinue() {
+    const path = resolveProgressRoute(currentProgress);
+    navigate(path);
+  }
+
+  // Dynamic lesson info based on progress
+  function getCurrentLessonInfo() {
+    const moduleId = currentProgress.module_id || 'mercury';
+    
+    const lessonInfo: Record<string, { title: string; description: string; planet: string; color: string }> = {
+      'mercury': {
+        title: 'Basic Concepts Review',
+        description: 'Master fundamental concepts and basic rational equations.',
+        planet: 'Mercury',
+        color: 'from-gray-500 to-gray-700'
+      },
+      'venus': {
+        title: 'Introduction to Rational Equations', 
+        description: 'Learn the foundations of rational equation solving.',
+        planet: 'Venus',
+        color: 'from-yellow-500 to-orange-500'
+      },
+      'earth': {
+        title: 'Core Rational Equations',
+        description: 'Develop core skills in rational equation manipulation.',
+        planet: 'Earth',
+        color: 'from-blue-500 to-green-500'
+      },
+      'mars': {
+        title: 'Rational Inequalities',
+        description: 'Master the art of solving rational inequalities in the volcanic terrain.',
+        planet: 'Mars',
+        color: 'from-red-500 to-red-900'
+      },
+      'jupiter': {
+        title: 'Advanced Problem Types',
+        description: 'Tackle complex rational equation scenarios.',
+        planet: 'Jupiter',
+        color: 'from-orange-500 to-red-500'
+      },
+      'saturn': {
+        title: 'Mastery Challenges',
+        description: 'Complete advanced challenges and ring-based problems.',
+        planet: 'Saturn',
+        color: 'from-yellow-600 to-orange-600'
+      },
+      'uranus': {
+        title: 'Creative Applications',
+        description: 'Apply rational equations to real-world scenarios.',
+        planet: 'Uranus',
+        color: 'from-cyan-500 to-blue-500'
+      },
+      'neptune': {
+        title: 'Final Assessments',
+        description: 'Demonstrate mastery through comprehensive evaluations.',
+        planet: 'Neptune',
+        color: 'from-blue-600 to-purple-600'
+      }
+    };
+
+    return lessonInfo[moduleId.toLowerCase()] || lessonInfo['mercury'];
+  }
+  // --- END ADD ---
 
   // Discover female voice files for constellation cadet lines
   const femaleVoices = useMemo(() => {
@@ -231,9 +299,9 @@ const RPGIndex = () => {
     {
       id: 'basic-solving',
       title: 'Rational Function',
-      description: 'Navigate the Crystal Caves of Calculation. Master basic solving techniques.',
+      description: 'Explore the Philippines archipelago and solve rational function challenges across different regions.',
       difficulty: 'beginner' as const,
-      status: 'completed' as const,
+      status: 'available' as const,
       xpReward: 200,
       position: { x: 40, y: 40 },
       connections: ['rational-inequalities'],
@@ -315,7 +383,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.42,
       size: 1.05,
       color: '#34d399',
-      locked: true,
+      locked: false,
       imageUrl: '/planets/earth.png'
     },
     {
@@ -325,7 +393,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.36,
       size: 0.8,
       color: '#f87171',
-      locked: true,
+      locked: false,
       imageUrl: marsImg
     },
     {
@@ -335,7 +403,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.3,
       size: 1.8,
       color: '#f59e0b',
-      locked: true,
+      locked: false,
       imageUrl: jupiterImg
     },
     {
@@ -345,7 +413,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.26,
       size: 1.6,
       color: '#fbbf24',
-      locked: true,
+      locked: false,
       imageUrl: saturnImg
     },
     {
@@ -355,7 +423,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.22,
       size: 1.25,
       color: '#60a5fa',
-      locked: true,
+      locked: false,
       imageUrl: uranusImg
     },
     {
@@ -365,7 +433,7 @@ const RPGIndex = () => {
       orbitSpeed: 0.18,
       size: 1.2,
       color: '#3b82f6',
-      locked: true,
+      locked: false,
       imageUrl: neptuneImg
     },
   ];
@@ -466,6 +534,11 @@ const RPGIndex = () => {
   const handleQuestSelect = (questId: string) => {
     if (questId === 'intro-rational') {
       startIntroCinematic();
+      return;
+    }
+    if (questId === 'basic-solving') {
+      // Navigate to Philippines Map for Rational Function quest
+      navigate('/philippines-map');
       return;
     }
     console.log(`Starting quest: ${questId}`);
@@ -732,6 +805,15 @@ const RPGIndex = () => {
             <Play size={24} className="mr-2" />
             Enter Solar System
           </Button>
+          <Button 
+            variant="outline" 
+            size="lg" 
+            className="px-8 py-4 text-lg holographic-border" 
+            onClick={() => navigate('/drawing-solver')}
+          >
+            <span className="mr-2">🎨</span>
+            Drawing Solver
+          </Button>
         </motion.div>
       </motion.section>
 
@@ -753,21 +835,26 @@ const RPGIndex = () => {
             <HolographicCard variant="quest" animated>
               <div className="p-6">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 bg-gradient-to-br from-red-500 to-red-900 rounded-full" />
+                  <div className={`w-12 h-12 bg-gradient-to-br ${getCurrentLessonInfo().color} rounded-full`} />
                   <div>
                     <h4 className="font-orbitron font-bold text-lg">In Progress</h4>
-                    <p className="text-sm text-muted-foreground">Rational Equations</p>
+                    <p className="text-sm text-muted-foreground">{getCurrentLessonInfo().planet} Lesson</p>
                   </div>
                 </div>
-                <h5 className="font-semibold mb-2">Rational Inequalities</h5>
+                <h5 className="font-semibold mb-2">{getCurrentLessonInfo().title}</h5>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Master the art of solving rational inequalities in the volcanic terrain.
+                  {getCurrentLessonInfo().description}
                 </p>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-cosmic-green">Progress: 0%</span>
-                  <Button size="sm" className="bg-gradient-quest">
-                    Continue
-                  </Button>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-cosmic-green">
+                      Overall Progress: {getOverallProgress()}%
+                    </span>
+                    <Button size="sm" className="bg-gradient-quest" onClick={handleContinue}>
+                      Continue
+                    </Button>
+                  </div>
+                  <Progress value={getOverallProgress()} className="h-2" />
                 </div>
               </div>
             </HolographicCard>
@@ -775,27 +862,7 @@ const RPGIndex = () => {
 
           {/* Achievement Showcase */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 1.1 }}>
-            <HolographicCard variant="achievement" animated>
-              <div className="p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 bg-gradient-to-br from-stellar-gold to-warning rounded-full flex items-center justify-center">
-                    <span className="text-2xl">🏆</span>
-                  </div>
-                  <div>
-                    <h4 className="font-orbitron font-bold text-lg">Latest Achievement</h4>
-                    <p className="text-sm text-muted-foreground">Crystal Caves</p>
-                  </div>
-                </div>
-                <h5 className="font-semibold mb-2">Equation Master</h5>
-                <p className="text-sm text-muted-foreground mb-4">Solved 50 rational equations with perfect accuracy!</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-stellar-gold">+300 XP Earned</span>
-                  <Button size="sm" variant="outline">
-                    View All
-                  </Button>
-                </div>
-              </div>
-            </HolographicCard>
+            <AchievementDisplay />
           </motion.div>
 
           {/* Calculator Access */}
@@ -819,6 +886,32 @@ const RPGIndex = () => {
                 </p>
                 <Button size="sm" className="w-full bg-gradient-nebula" onClick={() => window.open('/calculator', '_blank')}>
                   Enter Portal
+                </Button>
+              </div>
+            </HolographicCard>
+          </motion.div>
+
+          {/* Drawing Solver Access */}
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 1.3 }}>
+            <HolographicCard variant="portal" animated>
+              <div className="p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 portal-effect rounded-full p-0.5">
+                    <div className="w-full h-full bg-card rounded-full flex items-center justify-center">
+                      <span className="text-2xl">🎨</span>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="font-orbitron font-bold text-lg">Drawing Solver</h4>
+                    <p className="text-sm text-muted-foreground">AI-Powered OCR</p>
+                  </div>
+                </div>
+                <h5 className="font-semibold mb-2">Hand-Drawn Equations</h5>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Draw mathematical equations by hand and let AI solve them step-by-step.
+                </p>
+                <Button size="sm" className="w-full bg-gradient-quest" onClick={() => navigate('/drawing-solver')}>
+                  Launch Solver
                 </Button>
               </div>
             </HolographicCard>

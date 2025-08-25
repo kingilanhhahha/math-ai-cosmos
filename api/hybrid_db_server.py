@@ -6,6 +6,19 @@ import uuid
 import random
 import string
 from datetime import datetime
+import sys
+import json
+
+# Add the parent directory to the path to import the rational function calculator
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import the rational function calculator
+try:
+    from yessss import RationalFunctionCalculator
+    CALCULATOR_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Rational function calculator not available: {e}")
+    CALCULATOR_AVAILABLE = False
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'hybrid.db')
 
@@ -87,6 +100,22 @@ def init_db():
     cur = conn.cursor()
     for s in SCHEMA:
         cur.execute(s)
+    
+    # --- BEGIN ADD: progress table bootstrap ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_progress (
+            user_id TEXT PRIMARY KEY,
+            module_id TEXT NOT NULL,
+            section_id TEXT NOT NULL,
+            slide_index INTEGER NOT NULL,
+            progress_pct REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    # --- END ADD ---
+    
     conn.commit()
     conn.close()
 
@@ -262,6 +291,89 @@ def create_progress():
     conn.commit()
     conn.close()
     return jsonify({ 'ok': True })
+
+@app.route('/api/progress/batch', methods=['POST'])
+def batch_progress():
+    """Batch save progress, achievements, and lesson completion for better performance"""
+    data = request.get_json(force=True)
+    required = ['user_id', 'progress_updates']
+    if not all(k in data for k in required):
+        return jsonify({ 'error': 'missing fields' }), 400
+    
+    try:
+        conn = connect()
+        cur = conn.cursor()
+        
+        # Save progress updates
+        for progress in data['progress_updates']:
+            cur.execute('''
+                INSERT OR REPLACE INTO user_progress 
+                (user_id, module_id, section_id, slide_index, progress_pct, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                progress['user_id'],
+                progress['module_id'],
+                progress['section_id'],
+                progress['slide_index'],
+                progress['progress_pct'],
+                now_iso()
+            ))
+        
+        # Save achievements if any
+        if 'achievements' in data:
+            for achievement in data['achievements']:
+                cur.execute('''
+                    INSERT INTO achievements 
+                    (id, userId, lessonId, lessonName, lessonType, xpEarned, completedAt, planetName)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    'id_' + uuid.uuid4().hex,
+                    achievement['userId'],
+                    achievement['lessonId'],
+                    achievement['lessonName'],
+                    achievement['lessonType'],
+                    achievement['xpEarned'],
+                    now_iso(),
+                    achievement.get('planetName')
+                ))
+        
+        # Save lesson completion if any
+        if 'lesson_completion' in data:
+            lesson = data['lesson_completion']
+            cur.execute('''
+                INSERT INTO student_progress 
+                (id, studentId, moduleId, moduleName, completedAt, score, timeSpent, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                'id_' + uuid.uuid4().hex,
+                data['user_id'],
+                lesson['lessonId'],
+                lesson['lessonName'],
+                now_iso(),
+                lesson['score'],
+                lesson['timeSpent'],
+                json.dumps({
+                    'equationsSolved': lesson.get('equationsSolved', []),
+                    'mistakes': lesson.get('mistakes', []),
+                    'skillBreakdown': lesson.get('skillBreakdown', {})
+                })
+            ))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({ 
+            'success': True, 
+            'message': 'Batch progress saved successfully',
+            'progress_count': len(data['progress_updates']),
+            'achievements_count': len(data.get('achievements', [])),
+            'lesson_completed': 'lesson_completion' in data
+        })
+        
+    except Exception as e:
+        if 'conn' in locals():
+            conn.close()
+        return jsonify({ 'error': f'Database error: {str(e)}' }), 500
 
 # Classroom endpoints
 @app.route('/api/classrooms', methods=['GET'])
@@ -522,6 +634,254 @@ def get_classrooms_by_student(student_id):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(rows)
+
+
+# --- BEGIN ADD: progress endpoints ---
+@app.route('/api/user-progress/<user_id>', methods=['GET'])
+def get_user_progress(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id, module_id, section_id, slide_index, progress_pct, updated_at FROM user_progress WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        if not row:
+            return jsonify({
+                "user_id": user_id,
+                "module_id": None,
+                "section_id": None,
+                "slide_index": 0,
+                "progress_pct": 0,
+                "updated_at": None
+            })
+        return jsonify({
+            "user_id": row[0],
+            "module_id": row[1],
+            "section_id": row[2],
+            "slide_index": row[3],
+            "progress_pct": row[4],
+            "updated_at": row[5]
+        })
+
+@app.route('/api/user-progress/upsert', methods=['POST'])
+def upsert_user_progress():
+    data = request.get_json(force=True)
+    now = datetime.utcnow().isoformat()
+    required = ['user_id', 'module_id', 'section_id', 'slide_index', 'progress_pct']
+    if not all(k in data for k in required):
+        return jsonify({"error": "missing fields"}), 400
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO user_progress (user_id, module_id, section_id, slide_index, progress_pct, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                module_id=excluded.module_id,
+                section_id=excluded.section_id,
+                slide_index=excluded.slide_index,
+                progress_pct=excluded.progress_pct,
+                updated_at=excluded.updated_at
+            """,
+            (data['user_id'], data['module_id'], data['section_id'], int(data['slide_index']), float(data['progress_pct']), now)
+        )
+        conn.commit()
+    return jsonify({"ok": True, "updated_at": now})
+# --- END ADD ---
+
+# --- BEGIN ADD: Rational Function Calculator Endpoints ---
+@app.route('/api/rational-function/analyze', methods=['POST'])
+def analyze_rational_function():
+    """Analyze a rational function and return step-by-step solution"""
+    if not CALCULATOR_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Rational function calculator not available'
+        }), 503
+    
+    try:
+        data = request.get_json(force=True)
+        function_str = data.get('function', '').strip()
+        
+        if not function_str:
+            return jsonify({
+                'success': False,
+                'error': 'No function provided'
+            }), 400
+        
+        # Create calculator instance
+        calculator = RationalFunctionCalculator()
+        
+        # Capture the output by redirecting stdout
+        import io
+        from contextlib import redirect_stdout
+        
+        output = io.StringIO()
+        with redirect_stdout(output):
+            calculator.analyze_rational_function(function_str)
+        
+        analysis_output = output.getvalue()
+        
+        return jsonify({
+            'success': True,
+            'function': function_str,
+            'analysis': analysis_output,
+            'message': 'Analysis completed successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/rational-function/domain', methods=['POST'])
+def find_domain():
+    """Find the domain of a rational function"""
+    if not CALCULATOR_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Rational function calculator not available'
+        }), 503
+    
+    try:
+        data = request.get_json(force=True)
+        function_str = data.get('function', '').strip()
+        
+        if not function_str:
+            return jsonify({
+                'success': False,
+                'error': 'No function provided'
+            }), 400
+        
+        # Create calculator instance
+        calculator = RationalFunctionCalculator()
+        
+        try:
+            numerator, denominator = calculator.parse_function(function_str)
+            domain_restrictions = calculator.find_domain(denominator)
+            
+            return jsonify({
+                'success': True,
+                'domain_restrictions': [str(r) for r in domain_restrictions],
+                'domain': f"(-∞, ∞) excluding {', '.join([str(r) for r in domain_restrictions])}" if domain_restrictions else "(-∞, ∞)"
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Error finding domain: {str(e)}'
+            }), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/rational-function/zeros', methods=['POST'])
+def find_zeros():
+    """Find the zeros of a rational function"""
+    if not CALCULATOR_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Rational function calculator not available'
+        }), 503
+    
+    try:
+        data = request.get_json(force=True)
+        function_str = data.get('function', '').strip()
+        
+        if not function_str:
+            return jsonify({
+                'success': False,
+                'error': 'No function provided'
+            }), 400
+        
+        # Create calculator instance
+        calculator = RationalFunctionCalculator()
+        
+        try:
+            numerator, denominator = calculator.parse_function(function_str)
+            common_factors, simplified_num, simplified_den = calculator.find_common_factors(numerator, denominator)
+            zeros = calculator.find_zeros(simplified_num, common_factors)
+            
+            return jsonify({
+                'success': True,
+                'zeros': [str(z) for z in zeros],
+                'common_factors': [str(cf) for cf in common_factors],
+                'simplified_numerator': str(simplified_num),
+                'simplified_denominator': str(simplified_den)
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Error finding zeros: {str(e)}'
+            }), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/rational-function/asymptotes', methods=['POST'])
+def find_asymptotes():
+    """Find asymptotes of a rational function"""
+    if not CALCULATOR_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Rational function calculator not available'
+        }), 503
+    
+    try:
+        data = request.get_json(force=True)
+        function_str = data.get('function', '').strip()
+        
+        if not function_str:
+            return jsonify({
+                'success': False,
+                'error': 'No function provided'
+            }), 400
+        
+        # Create calculator instance
+        calculator = RationalFunctionCalculator()
+        
+        try:
+            numerator, denominator = calculator.parse_function(function_str)
+            common_factors, simplified_num, simplified_den = calculator.find_common_factors(numerator, denominator)
+            
+            vertical_asymptotes = calculator.find_vertical_asymptotes(denominator, common_factors)
+            horizontal_asymptote = calculator.find_horizontal_asymptote(numerator, denominator)
+            oblique_asymptote = calculator.find_oblique_asymptote(numerator, denominator)
+            
+            return jsonify({
+                'success': True,
+                'vertical_asymptotes': [str(va) for va in vertical_asymptotes],
+                'horizontal_asymptote': horizontal_asymptote,
+                'oblique_asymptote': str(oblique_asymptote) if oblique_asymptote else None
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Error finding asymptotes: {str(e)}'
+            }), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/rational-function/health', methods=['GET'])
+def rational_function_health():
+    """Health check for rational function calculator"""
+    return jsonify({
+        'status': 'healthy',
+        'rational_function_calculator_available': CALCULATOR_AVAILABLE,
+        'message': 'Rational function calculator integration status'
+    })
+# --- END ADD ---
 
 
 if __name__ == '__main__':

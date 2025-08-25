@@ -1,25 +1,46 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, ArrowRight, Calculator, CheckCircle, Lightbulb, Target, AlertTriangle, Trophy } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { usePlayer } from '@/contexts/PlayerContext';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import {
+  BookOpen,
+  Target,
+  Lightbulb,
+  CheckCircle,
+  ArrowRight,
+  ArrowLeft,
+  Trophy,
+  Brain,
+  Calculator,
+  AlertTriangle,
+  Home
+} from 'lucide-react';
+import 'katex/dist/katex.min.css';
 import { InlineMath, BlockMath } from 'react-katex';
 import earth1 from '../../planet background/EARTH 1.jpeg';
 import earth2 from '../../planet background/EARTH 2.jpeg';
-import { usePlayer } from '@/contexts/PlayerContext';
-import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/database';
 
 const EarthLesson: React.FC = () => {
   const { toast } = useToast();
-  const { awardXP } = usePlayer();
   const { user } = useAuth();
-  const [current, setCurrent] = useState(0);
+  const navigate = useNavigate();
+  const { saveProgress, awardXP, saveAchievement, completeLesson } = usePlayer();
+  const [currentSection, setCurrentSection] = useState(0);
   const [progress, setProgress] = useState(0);
   const [equationsSolved, setEquationsSolved] = useState<string[]>([]);
   const [mistakes, setMistakes] = useState<string[]>([]);
+  const [questionsAnswered, setQuestionsAnswered] = useState<Record<number, {correct: boolean, answer: string, explanation?: string}>>({});
+  const [showQuestionFeedback, setShowQuestionFeedback] = useState<Record<number, boolean>>({});
+  const [quizCompleted, setQuizCompleted] = useState(false);
+  const [showCompletionDialog, setShowCompletionDialog] = useState(false);
+  const [current, setCurrent] = useState(0);
   const startRef = useRef<number>(Date.now());
   const [skills, setSkills] = useState<Record<string, { correct: number; total: number }>>({
     lcdFinding: { correct: 0, total: 0 },
@@ -32,13 +53,30 @@ const EarthLesson: React.FC = () => {
 
   useEffect(() => { startRef.current = Date.now(); }, []);
 
+  // Save progress whenever currentSection changes - but debounced to avoid excessive saves
+  useEffect(() => {
+    if (user?.id) {
+      const timeoutId = setTimeout(() => {
+        const progressPercentage = ((current + 1) / steps.length) * 100;
+        saveProgress(user.id, {
+          module_id: 'earth',
+          section_id: 'section_0',
+          slide_index: current,
+          progress_pct: progressPercentage,
+        });
+      }, 1000); // Debounce progress saves by 1 second
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [current, user?.id]);
+
   // Two Earth background images; alternate every slide
   const earthBackgrounds = [
     earth1,
     earth2
   ];
 
-  const saveProgress = async () => {
+  const saveLessonProgress = async () => {
     try {
       const total = equationsSolved.length + mistakes.length;
       const score = total > 0 ? Math.round((equationsSolved.length / total) * 100) : 0;
@@ -60,177 +98,503 @@ const EarthLesson: React.FC = () => {
     }
   };
 
+  const handleFinishLesson = async () => {
+    try {
+      // Use the optimized lesson completion function
+      const success = await completeLesson(user.id, {
+        lessonId: 'earth-lesson',
+        lessonName: 'Earth — Clearing Denominators',
+        score: getPerformanceSummary().percentage,
+        timeSpent: Math.max(1, Math.round((Date.now() - startRef.current) / 60000)),
+        equationsSolved,
+        mistakes,
+        skillBreakdown: skills,
+        xpEarned: 250,
+        planetName: 'Earth',
+      });
+      
+      if (success) {
+        toast({
+          title: "Lesson Complete! 🎉",
+          description: "Your progress has been saved successfully.",
+        });
+      } else {
+        toast({
+          title: "Progress Saved",
+          description: "Lesson completed, but some data may not have been saved.",
+          variant: "default",
+        });
+      }
+      
+      // Show completion dialog
+      setShowCompletionDialog(true);
+    } catch (error) {
+      console.error('Error completing lesson:', error);
+      toast({
+        title: "Lesson Completed",
+        description: "Lesson finished, but there was an issue saving progress.",
+        variant: "destructive",
+      });
+      setShowCompletionDialog(true);
+    }
+  };
+
+  const handleContinueToNext = async () => {
+    await saveLessonProgress();
+    
+    // Save progress for next lesson (Mars) so it shows up in "In Progress"
+    if (user?.id) {
+      try {
+        await saveProgress(user.id, {
+          module_id: 'mars',
+          section_id: 'section_0',
+          slide_index: 0,
+          progress_pct: 0, // Starting fresh on next lesson
+        });
+      } catch (error) {
+        console.error('Error saving progress for next lesson:', error);
+      }
+    }
+    
+    toast({ title: 'Progress Saved! 🚀', description: 'Continuing to next lesson.' });
+    navigate('/mars-lesson');
+  };
+
+  const handleQuizAnswer = (questionId: number, selectedAnswer: string, correctAnswer: string, explanation: string) => {
+    const isCorrect = selectedAnswer === correctAnswer;
+    
+    setQuestionsAnswered(prev => ({
+      ...prev,
+      [questionId]: {
+        correct: isCorrect,
+        answer: selectedAnswer,
+        explanation: isCorrect ? undefined : explanation
+      }
+    }));
+
+    setShowQuestionFeedback(prev => ({
+      ...prev,
+      [questionId]: true
+    }));
+
+    if (isCorrect) {
+      toast({
+        title: "Correct! 🎉",
+        description: "Great job! You understand this concept.",
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "Not quite right 📚",
+        description: "Check the explanation below to learn more.",
+        variant: "destructive",
+      });
+    }
+
+    // Check if quiz is completed
+    const totalQuestions = 3;
+    const answeredCount = Object.keys(questionsAnswered).length + 1;
+    if (answeredCount === totalQuestions) {
+      setTimeout(() => setQuizCompleted(true), 1000);
+    }
+  };
+
+  const getPerformanceSummary = () => {
+    const answers = Object.values(questionsAnswered);
+    const correct = answers.filter(a => a.correct).length;
+    const total = answers.length;
+    const percentage = total > 0 ? Math.round((correct / total) * 100) : 0;
+    
+    return { correct, total, percentage };
+  };
+
+  const getImprovementAreas = () => {
+    const areas: string[] = [];
+    
+    if (questionsAnswered[1] && !questionsAnswered[1].correct) {
+      areas.push("Understanding LCD concept in rational equations");
+    }
+    if (questionsAnswered[2] && !questionsAnswered[2].correct) {
+      areas.push("Applying LCD method to solve equations");
+    }
+    if (questionsAnswered[3] && !questionsAnswered[3].correct) {
+      areas.push("Checking solutions against restrictions");
+    }
+    
+    return areas;
+  };
+
   const steps = [
     {
       id: 1,
-      title: 'Eliminate Denominators with the LCD',
-      icon: <Target className="w-5 h-5" />,
+      title: 'Definition — Clearing Denominators',
+      icon: <Lightbulb className="w-5 h-5" />,
       content: (
         <div className="space-y-4">
-          <p className="text-card-foreground">Multiply <strong>every term</strong> on both sides by the LCD to clear fractions.</p>
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <BlockMath math={'(x+2)(x-2) \\cdot \\frac{1}{x+2} + (x+2)(x-2) \\cdot \\frac{1}{x-2} = (x+2)(x-2) \\cdot \\frac{3}{x^2-4}'} />
+          <p className="text-card-foreground">
+            Clearing denominators means <strong>removing all fractions</strong> in a rational equation by multiplying
+            every term by the <strong>Least Common Denominator (LCD)</strong>. This makes the equation easier to solve
+            because you work with whole numbers or polynomials instead of fractions.
+          </p>
+          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
+            <p className="text-sm text-muted-foreground">Goal: Turn a rational equation into a standard algebraic equation.</p>
           </div>
         </div>
       )
     },
     {
       id: 2,
-      title: 'Show Cancellation Explicitly',
-      icon: <Lightbulb className="w-5 h-5" />,
+      title: 'Steps to Clear Denominators',
+      icon: <Target className="w-5 h-5" />,
       content: (
-        <div className="space-y-3">
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <BlockMath math={'\\cancel{(x+2)}(x-2) \\cdot \\frac{1}{\\cancel{(x+2)}} + (x+2)\\cancel{(x-2)} \\cdot \\frac{1}{\\cancel{(x-2)}} = 3'} />
-          </div>
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <BlockMath math={'x-2 + (x+2) = 3'} />
+        <div className="space-y-4">
+          <ol className="list-decimal list-inside space-y-2 text-card-foreground">
+            <li><strong>Identify</strong> all denominators.</li>
+            <li><strong>Find</strong> the LCD of all denominators.</li>
+            <li><strong>Multiply</strong> every term by the LCD (both sides).</li>
+            <li><strong>Simplify</strong> using cancellation.</li>
+            <li><strong>Solve</strong> the resulting equation.</li>
+            <li><strong>Check restrictions</strong> (values that make any denominator zero).</li>
+          </ol>
+          <div className="bg-accent/20 rounded-xl p-3 border border-white/10">
+            <p className="text-sm">Tip: Write cancellations explicitly to avoid mistakes.</p>
           </div>
         </div>
       )
     },
     {
       id: 3,
-      title: 'Solve the Resulting Equation',
+      title: 'Example 1 — Clear Denominators and Solve',
       icon: <Calculator className="w-5 h-5" />,
       content: (
-        <div className="space-y-3">
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <BlockMath math={'2x = 3 \\;\\Rightarrow\\; x = \\tfrac{3}{2}'} />
+        <div className="space-y-4">
+          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
+            <div className="text-center">
+              <BlockMath math={'\\frac{1}{x} + \\frac{1}{2} = \\frac{3}{4}'} />
+            </div>
           </div>
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <p className="text-sm text-muted-foreground">Always solve after combining like terms.</p>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">1) Denominators</p>
+              <BlockMath math={'x, \\; 2, \\; 4'} />
+            </div>
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">2) LCD</p>
+              <BlockMath math={'4x'} />
+            </div>
+          </div>
+          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
+            <p className="text-sm font-semibold mb-2">3) Multiply through by LCD</p>
+            <div className="text-center">
+              <BlockMath math={'4x \\cdot \\frac{1}{x} + 4x \\cdot \\frac{1}{2} = 4x \\cdot \\frac{3}{4}'} />
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">4) Simplify</p>
+              <BlockMath math={'4 + 2x = 3x'} />
+            </div>
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">5) Solve</p>
+              <BlockMath math={'4 = x'} />
+            </div>
+          </div>
+          <div className="bg-green-500/15 rounded-xl p-3 border border-green-300/20">
+            <p className="text-sm"><strong>6) Restriction:</strong> <InlineMath math={'x \\neq 0'} />. Final answer <InlineMath math={'x=4'} /> is valid.</p>
           </div>
         </div>
       )
     },
     {
       id: 4,
-      title: 'Verify Against Restrictions',
-      icon: <CheckCircle className="w-5 h-5" />,
+      title: 'Example 2 — Clear Denominators and Solve',
+      icon: <Calculator className="w-5 h-5" />,
       content: (
-        <div className="space-y-3">
-          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm shadow-[0_0_30px_rgba(0,0,0,0.15)]">
-            <p className="text-sm text-card-foreground mb-2">Restrictions come from denominators only.</p>
-            <BlockMath math={'x \\neq 2,\\; -2'} />
-            <p className="text-sm text-muted-foreground mt-2">Since <InlineMath math={'x=\\tfrac{3}{2}'} /> is not restricted, it’s valid.</p>
+        <div className="space-y-4">
+          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
+            <div className="text-center">
+              <BlockMath math={'\\frac{1}{x} + \\frac{1}{3} = \\frac{1}{6}'} />
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">1) Denominators</p>
+              <BlockMath math={'x, \\; 3, \\; 6'} />
+            </div>
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">2) LCD</p>
+              <BlockMath math={'6x'} />
+            </div>
+          </div>
+          <div className="bg-card/40 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
+            <p className="text-sm font-semibold mb-2">3) Multiply through by LCD</p>
+            <div className="text-center">
+              <BlockMath math={'6x \\cdot \\frac{1}{x} + 6x \\cdot \\frac{1}{3} = 6x \\cdot \\frac{1}{6}'} />
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">4) Simplify</p>
+              <BlockMath math={'6 + 2x = x'} />
+            </div>
+            <div className="bg-white/10 rounded-xl p-3 border border-white/20">
+              <p className="text-sm font-semibold mb-1">5) Solve</p>
+              <BlockMath math={'6 = -x \\;\\Rightarrow\\; x = -6'} />
+            </div>
+          </div>
+          <div className="bg-green-500/15 rounded-xl p-3 border border-green-300/20">
+            <p className="text-sm"><strong>6) Restriction:</strong> <InlineMath math={'x \\neq 0'} />. Final answer <InlineMath math={'x=-6'} /> is valid.</p>
           </div>
         </div>
       )
     },
     {
       id: 5,
-      title: 'Mini Assessment — Clearing Denominators',
+      title: 'Gamified Practice — Clear the Denominators',
       icon: <Trophy className="w-5 h-5" />,
       content: (
-        <div className="space-y-4">
-          <div className="bg-card/30 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
-            <h4 className="font-semibold mb-2">Question 1</h4>
-            <div className="flex justify-center mb-3">
-              <BlockMath math={'\\frac{1}{x} + \\frac{2}{x+1} = 3'} />
-            </div>
-            <p className="text-sm text-muted-foreground mb-3">Multiply both sides by which LCD?</p>
-            <div className="grid grid-cols-2 gap-2">
-              {['x(x+1)', 'x+1', 'x', 'x^2+x'].map((a) => (
+        <div className="space-y-6">
+          {/* Question 1 */}
+          <div className="bg-gradient-to-br from-yellow-500/20 to-orange-500/20 rounded-xl p-6 border border-yellow-300/30">
+            <h4 className="text-yellow-200 font-semibold mb-3 flex items-center gap-2">
+              <span className="bg-yellow-500 text-black px-2 py-1 rounded-full text-sm font-bold">Q1</span>
+              What is the LCD of 1/x and 1/2?
+            </h4>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {['x', '2', '2x', 'x/2'].map((option) => (
                 <Button
-                  key={a}
-                  variant="outline"
+                  key={option}
+                  variant={questionsAnswered[1]?.answer === option ? 
+                    (questionsAnswered[1]?.correct ? "default" : "destructive") : "outline"}
                   size="sm"
-                  onClick={() => {
-                    if (a === 'x(x+1)') {
-                      setEquationsSolved(prev => [...prev, 'Chose LCD: x(x+1)']);
-                      setSkills(prev => ({ ...prev, lcdFinding: { correct: prev.lcdFinding.correct + 1, total: prev.lcdFinding.total + 1 } }));
-                      awardXP(50, 'earth-q1');
-                      toast({ title: 'Correct!', description: 'Use the product of unique factors.' });
-                    } else {
-                      setSkills(prev => ({ ...prev, lcdFinding: { ...prev.lcdFinding, total: prev.lcdFinding.total + 1 } }));
-                      setMistakes(prev => [...prev, `LCD mistake for 1/x + 2/(x+1): chose ${a}`]);
-                      toast({ title: 'Not quite', description: 'Include all unique factors.', variant: 'destructive' });
-                    }
-                  }}
-                  className="hover:shadow-[0_0_20px_rgba(59,130,246,0.35)]"
+                  onClick={() => handleQuizAnswer(
+                    1, 
+                    option, 
+                    '2x',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[1]}
+                  className="hover:shadow-[0_0_20px_rgba(236,72,153,0.35)]"
                 >
-                  {a}
+                  <BlockMath math={option} />
                 </Button>
               ))}
             </div>
-          </div>
-
-          <div className="bg-card/30 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
-            <h4 className="font-semibold mb-2">Question 2</h4>
-            <div className="flex justify-center mb-3">
-              <BlockMath math={'(x+1)(x-1) \\cdot \\frac{1}{x+1} + (x+1)(x-1) \\cdot \\frac{1}{x-1)'} />
-            </div>
-            <p className="text-sm text-muted-foreground mb-3">After cancellation, which equation remains?</p>
-            <div className="grid grid-cols-2 gap-2">
-              {['x-1 + x+1 = 3', 'x+1 + x-1 = 3', '2x = 3', 'x^2-1 = 3'].map((a) => (
-                <Button
-                  key={a}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (a === '2x = 3') {
-                      setEquationsSolved(prev => [...prev, 'Simplified correctly to 2x = 3']);
-                      setSkills(prev => ({ ...prev, solvingProcess: { correct: prev.solvingProcess.correct + 1, total: prev.solvingProcess.total + 1 } }));
-                      awardXP(50, 'earth-q2');
-                      toast({ title: 'Great!', description: 'You showed the correct cancellation.' });
-                    } else {
-                      setSkills(prev => ({ ...prev, solvingProcess: { ...prev.solvingProcess, total: prev.solvingProcess.total + 1 } }));
-                      setMistakes(prev => [...prev, `Wrong simplification choice: ${a}`]);
-                      toast({ title: 'Incorrect', description: 'Track each term’s cancellation.', variant: 'destructive' });
-                    }
-                  }}
-                  className="hover:shadow-[0_0_20px_rgba(59,130,246,0.35)]"
-                >
-                  {a}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-accent/20 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
-            <h4 className="font-semibold text-accent mb-2 flex items-center gap-2"><AlertTriangle size={16} /> Tip</h4>
-            <p className="text-sm text-card-foreground">Distribute LCD to <strong>every term</strong> and show cancellations explicitly to avoid mistakes.</p>
-          </div>
-
-          <div className="flex gap-2">
-            <Button onClick={saveProgress} className="mt-2">Finish Lesson</Button>
-          </div>
-
-          <div className="bg-primary/10 rounded-xl p-4 border border-white/10 backdrop-blur-sm">
-            <h4 className="font-semibold text-primary mb-2">Your Results</h4>
-            <ul className="text-sm space-y-1">
-              {equationsSolved.map((s, i) => (
-                <li key={i} className="text-success flex items-center gap-2"><CheckCircle size={14} /> {s}</li>
-              ))}
-            </ul>
-            {mistakes.length > 0 && (
-              <div className="mt-3">
-                <h5 className="font-semibold text-destructive mb-1">Needs Attention</h5>
-                <ul className="text-xs space-y-1">
-                  {mistakes.map((m, i) => (
-                    <li key={i} className="text-destructive">{m}</li>
-                  ))}
-                </ul>
+            {showQuestionFeedback[1] && questionsAnswered[1] && !questionsAnswered[1].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30">
+                <h5 className="text-red-200 font-semibold mb-3">💡 How to Find LCD Step-by-Step:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 1: Identify the denominators</p>
+                    <p>• First fraction: x</p>
+                    <p>• Second fraction: 2</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 2: Find all unique factors</p>
+                    <p>• From x: factor is x</p>
+                    <p>• From 2: factor is 2</p>
+                    <p>• Unique factors: 2, x</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 3: Multiply all unique factors</p>
+                    <p>• LCD = 2 × x = 2x</p>
+                  </div>
+                  <div className="bg-green-500/20 rounded p-2 border border-green-300/30">
+                    <p className="text-green-200 text-xs">✓ Check: 2x ÷ x = 2 ✓ and 2x ÷ 2 = x ✓</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[1] && questionsAnswered[1] && questionsAnswered[1].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30">
+                <p className="text-green-200 font-semibold">✅ Excellent! You correctly identified that 2x is the LCD.</p>
               </div>
             )}
           </div>
+
+          {/* Question 2 */}
+          <div className="bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-xl p-6 border border-blue-300/30">
+            <h4 className="text-blue-200 font-semibold mb-3 flex items-center gap-2">
+              <span className="bg-blue-500 text-white px-2 py-1 rounded-full text-sm font-bold">Q2</span>
+              Solve: 1/x + 1/2 = 1/4
+            </h4>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {['x = 4', 'x = -4', 'x = 2', 'x = -2'].map((option) => (
+                <Button
+                  key={option}
+                  variant={questionsAnswered[2]?.answer === option ? 
+                    (questionsAnswered[2]?.correct ? "default" : "destructive") : "outline"}
+                  size="sm"
+                  onClick={() => handleQuizAnswer(
+                    2, 
+                    option, 
+                    'x = -4',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[2]}
+                  className="hover:shadow-[0_0_20px_rgba(236,72,153,0.35)]"
+                >
+                  {option}
+                </Button>
+              ))}
+            </div>
+            {showQuestionFeedback[2] && questionsAnswered[2] && !questionsAnswered[2].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30">
+                <h5 className="text-red-200 font-semibold mb-3">💡 How to Solve with LCD Method:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 1: Find the LCD</p>
+                    <p>• Denominators: x, 2, 4</p>
+                    <p>• LCD = 4x</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 2: Multiply by LCD</p>
+                    <p>• 4x × (1/x + 1/2) = 4x × (1/4)</p>
+                    <p>• 4 + 2x = x</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">STEP 3: Solve for x</p>
+                    <p>• 4 + 2x = x</p>
+                    <p>• 4 = -x</p>
+                    <p>• x = -4</p>
+                  </div>
+                  <div className="bg-green-500/20 rounded p-2 border border-green-300/30">
+                    <p className="text-green-200 text-xs">✓ Check: x ≠ 0, so x = -4 is valid</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[2] && questionsAnswered[2] && questionsAnswered[2].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30">
+                <p className="text-green-200 font-semibold">✅ Perfect! You solved it correctly using LCD.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Question 3 */}
+          <div className="bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-xl p-6 border border-purple-300/30">
+            <h4 className="text-purple-200 font-semibold mb-3 flex items-center gap-2">
+              <span className="bg-purple-500 text-white px-2 py-1 rounded-full text-sm font-bold">Q3</span>
+              What restriction applies to x in 1/x + 1/2 = 1/4?
+            </h4>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {['x ≠ 0', 'x ≠ 2', 'x ≠ 4', 'x ≠ -4'].map((option) => (
+                <Button
+                  key={option}
+                  variant={questionsAnswered[3]?.answer === option ? 
+                    (questionsAnswered[3]?.correct ? "default" : "destructive") : "outline"}
+                  size="sm"
+                  onClick={() => handleQuizAnswer(
+                    3, 
+                    option, 
+                    'x ≠ 0',
+                    "Step-by-step explanation shown below"
+                  )}
+                  disabled={!!questionsAnswered[3]}
+                  className="hover:shadow-[0_0_20px_rgba(236,72,153,0.35)]"
+                >
+                  {option}
+                </Button>
+              ))}
+            </div>
+            {showQuestionFeedback[3] && questionsAnswered[3] && !questionsAnswered[3].correct && (
+              <div className="bg-red-500/20 rounded-lg p-4 border border-red-300/30">
+                <h5 className="text-red-200 font-semibold mb-3">💡 Understanding Restrictions:</h5>
+                <div className="text-white/90 text-sm space-y-3">
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">WHY do we check restrictions?</p>
+                    <p>• Division by zero is undefined</p>
+                    <p>• If x = 0, then 1/x becomes 1/0 (undefined)</p>
+                    <p>• This would make the equation invalid</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">HOW to find restrictions:</p>
+                    <p>• Look at all denominators in the equation</p>
+                    <p>• Set each denominator equal to zero</p>
+                    <p>• Solve for the variable</p>
+                  </div>
+                  <div className="bg-white/10 rounded p-3">
+                    <p className="font-semibold text-yellow-200 mb-1">In this equation:</p>
+                    <p>• Denominator: x</p>
+                    <p>• Set x = 0</p>
+                    <p>• Restriction: x ≠ 0</p>
+                  </div>
+                  <div className="bg-green-500/20 rounded p-2 border border-green-300/30">
+                    <p className="text-green-200 text-xs">✓ Always check restrictions before solving!</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showQuestionFeedback[3] && questionsAnswered[3] && questionsAnswered[3].correct && (
+              <div className="bg-green-500/20 rounded-lg p-4 border border-green-300/30">
+                <p className="text-green-200 font-semibold">✅ Great! You understand restrictions correctly.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Quiz Results */}
+          {quizCompleted && (
+            <div className="bg-gradient-to-br from-indigo-500/20 to-cyan-500/20 rounded-xl p-6 border border-indigo-300/30">
+              <h4 className="text-indigo-200 font-semibold mb-4 flex items-center gap-2">
+                <Trophy className="w-6 h-6" />
+                Quiz Results
+              </h4>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="bg-white/10 rounded-lg p-4">
+                  <h5 className="text-white font-semibold mb-2">Performance Summary</h5>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-cyan-300 mb-1">
+                      {getPerformanceSummary().correct}/{getPerformanceSummary().total}
+                    </div>
+                    <p className="text-white/80 text-sm">Questions Correct</p>
+                    <div className="text-xl font-semibold text-cyan-200 mt-2">
+                      {getPerformanceSummary().percentage}%
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white/10 rounded-lg p-4">
+                  <h5 className="text-white font-semibold mb-2">Areas to Improve</h5>
+                  {getImprovementAreas().length > 0 ? (
+                    <ul className="text-sm text-white/90 space-y-1">
+                      {getImprovementAreas().map((area, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="text-yellow-400 mt-1">•</span>
+                          {area}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-green-300 text-sm">🎉 Excellent! No areas need improvement.</p>
+                  )}
+                </div>
+              </div>
+              {getPerformanceSummary().percentage >= 70 ? (
+                <div className="bg-green-500/20 rounded-lg p-4 mt-4 border border-green-300/30 text-center">
+                  <p className="text-green-200 font-semibold">🎊 Well done! You're ready to continue to the next lesson!</p>
+                </div>
+              ) : (
+                <div className="bg-yellow-500/20 rounded-lg p-4 mt-4 border border-yellow-300/30 text-center">
+                  <p className="text-yellow-200 font-semibold">📚 Consider reviewing the concepts above before continuing.</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )
     }
   ];
 
   const prev = () => {
-    if (current > 0) {
-      const n = current - 1;
-      setCurrent(n);
+    if (currentSection > 0) {
+      const n = currentSection - 1;
+      setCurrentSection(n);
       setProgress((n / (steps.length - 1)) * 100);
     }
   };
   const next = () => {
-    if (current < steps.length - 1) {
-      const n = current + 1;
-      setCurrent(n);
+    if (currentSection < steps.length - 1) {
+      const n = currentSection + 1;
+      setCurrentSection(n);
       setProgress((n / (steps.length - 1)) * 100);
     }
   };
@@ -240,9 +604,10 @@ const EarthLesson: React.FC = () => {
       {/* Animated Earth background drift */}
       <motion.div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-        style={{ backgroundImage: `url(${earthBackgrounds[current % earthBackgrounds.length]})` }}
-        animate={{ scale: [1.06, 1.09, 1.06], x: [0, 12, 0], y: [0, 8, 0] }}
-        transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
+        style={{ backgroundImage: `url(${earthBackgrounds[currentSection % earthBackgrounds.length]})` }}
+        initial={{ scale: 1.02, x: 0, y: 0 }}
+        animate={{ scale: 1.05, x: 6, y: 4 }}
+        transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
       />
       {/* Vignette/gradient for readability */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/35 to-black/60" />
@@ -259,7 +624,7 @@ const EarthLesson: React.FC = () => {
               <p className="text-xs text-white/80">Lesson 3</p>
             </div>
           </div>
-          <Badge variant="secondary">{current + 1} / {steps.length}</Badge>
+          <Badge variant="secondary">{currentSection + 1} / {steps.length}</Badge>
         </div>
       </motion.header>
 
@@ -276,7 +641,7 @@ const EarthLesson: React.FC = () => {
           </div>
 
           <motion.div
-            key={steps[current].id}
+            key={steps[currentSection].id}
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
@@ -285,25 +650,83 @@ const EarthLesson: React.FC = () => {
           >
             <div className="p-6">
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 rounded-md bg-white/10 shadow-[0_0_18px_rgba(255,255,255,0.15)]">{steps[current].icon ?? <Target className="w-5 h-5" />}</div>
+                <div className="p-2 rounded-md bg-white/10 shadow-[0_0_18px_rgba(255,255,255,0.15)]">{steps[currentSection].icon ?? <Target className="w-5 h-5" />}</div>
                 <h2 className="font-semibold bg-gradient-to-r from-white to-blue-200 bg-clip-text text-transparent">
-                  {steps[current].title}
+                  {steps[currentSection].title}
                 </h2>
               </div>
-              {steps[current].content}
+              {steps[currentSection].content}
             </div>
           </motion.div>
 
           <div className="flex justify-between items-center mt-6">
-            <Button variant="outline" onClick={prev} disabled={current === 0} className="flex items-center gap-2 bg-white/10 border-white/20 text-white hover:bg-white/20">
+            <Button variant="outline" onClick={prev} disabled={currentSection === 0} className="flex items-center gap-2 bg-white/10 border-white/20 text-white hover:bg-white/20">
               <ArrowLeft size={16} /> Previous
             </Button>
-            <Button onClick={next} disabled={current === steps.length - 1} className="flex items-center gap-2 shadow-[0_0_30px_rgba(59,130,246,0.35)]">
-              Next <ArrowRight size={16} />
-            </Button>
+            
+            {currentSection === steps.length - 1 ? (
+              // Last step: show Finish Lesson and Continue buttons
+              <div className="flex gap-3">
+                <Button 
+                  variant="outline" 
+                  onClick={handleFinishLesson}
+                  className="flex items-center gap-2 bg-white/10 border-white/20 text-white hover:bg-white/20"
+                >
+                  <CheckCircle size={16} /> Finish Lesson
+                </Button>
+                <Button 
+                  onClick={handleContinueToNext}
+                  className="flex items-center gap-2 shadow-[0_0_30px_rgba(59,130,246,0.35)]"
+                >
+                  <ArrowRight size={16} /> Continue to Mars
+                </Button>
+              </div>
+            ) : (
+              // Not last step: show Next button
+              <Button onClick={next} className="flex items-center gap-2 shadow-[0_0_30px_rgba(59,130,246,0.35)]">
+                Next <ArrowRight size={16} />
+              </Button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Completion Dialog */}
+      <AlertDialog open={showCompletionDialog} onOpenChange={setShowCompletionDialog}>
+        <AlertDialogContent className="border-cosmic-purple/20 bg-cosmic-dark/95 backdrop-blur-md">
+          <AlertDialogHeader className="text-center">
+            <AlertDialogTitle className="text-2xl font-orbitron text-cosmic-purple">
+              🎉 Earth Lesson Complete!
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-cosmic-text text-center">
+              Excellent work! You've mastered clearing denominators in rational equations. 
+              <br />
+              <strong className="text-cosmic-green">Mars lesson is now unlocked!</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-3 justify-center">
+            <AlertDialogCancel 
+              onClick={() => {
+                setShowCompletionDialog(false);
+                navigate('/rpg');
+              }}
+              className="bg-transparent border-white/20 text-white hover:bg-white/10"
+            >
+              <Home size={16} className="mr-2" />
+              Back to Solar System
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => {
+                setShowCompletionDialog(false);
+                handleContinueToNext();
+              }}
+              className="bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white"
+            >
+              Continue to Mars 🚀
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
